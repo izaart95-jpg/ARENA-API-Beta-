@@ -8,7 +8,7 @@ you can contact me at izaart95@gmail.com
 MOBILE IS SUPPORTED USE KIWI BROWSER OR ERUDA
 
 # Usage
-If you are using Lmarena without logging in keep v2_auth False in config.json 
+If you are using Lmarena without logging in keep v2_auth False in config.json  if you are logged in on website change v2_auth to True also you have to change auth-prod-v1 in new.py to auth-prod-v1.0 in payload gens 
 Go to Lmarena website Start a Chat with any model copy url For instance url is https://arena.ai/c/eval_id Open Devtools Get auth-prod-v1 cookie From applicaions tab also get __cf_clearnece and __cf_bm  
 Install Dependencies
 Run python main.py
