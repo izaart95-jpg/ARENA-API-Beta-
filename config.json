@@ -9,7 +9,6 @@
   "AUTO_TOKEN": true,
   "search": false,
   "reasoning": false,
-  "v2_auth": false,
   "image": false,
   "image_edit": false,
   "searchmodel": "019c6f55-308b-71ac-95af-f023a48253cf",
