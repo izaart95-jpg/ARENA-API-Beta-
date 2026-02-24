@@ -507,7 +507,7 @@ def main():
     # First-time / Base config checking
     missing_config = False
     if not cfg.get("auth_prod"):
-        cfg["auth_prod"] = input("Enter {auth_cookie_label} cookie: ").strip()
+        cfg["auth_prod"] = input(f"Enter {auth_cookie_label} cookie: ").strip()
         missing_config = True
     if not cfg.get("cf_clearance"):
         cfg["cf_clearance"] = input("Enter cf_clearance cookie: ").strip()
