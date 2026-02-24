@@ -482,11 +482,15 @@ def execute_request(cfg, mode, model_id, prompt_text, recaptcha_token):
 
                 # Success (200) — stream the response
                 if cfg.get("Tokenizer"):
-                    new_token = response.cookies.get("arena-auth-prod-v1")
+                    
+                    # Pick correct cookie name based on v2_auth
+                    cookie_name = "arena-auth-prod-v1.1" if cfg.get("v2_auth") else "arena-auth-prod-v1"
+
+                    new_token = response.cookies.get(cookie_name)
                     if new_token:
                         cfg["auth_prod"] = new_token
                         save_config(cfg)
-                        print("✅ arena-auth-prod-v1 cookie refreshed")
+                        print(f"✅ {cookie_name} cookie refreshed")
 
                 print(f"\n--- Streaming ({mode}) ---\n")
                 process_stream(response.iter_lines(), cfg, mode)
@@ -498,10 +502,12 @@ def main():
     cfg = load_config()
     cfg = ensure_extended_config(cfg)
 
+    # Decide cookie label based on v2_auth
+    auth_cookie_label = "arena-auth-prod-v1.0" if cfg.get("v2_auth") else "arena-auth-prod-v1"
     # First-time / Base config checking
     missing_config = False
     if not cfg.get("auth_prod"):
-        cfg["auth_prod"] = input("Enter arena-auth-prod-v1 cookie: ").strip()
+        cfg["auth_prod"] = input("Enter {auth_cookie_label} cookie: ").strip()
         missing_config = True
     if not cfg.get("cf_clearance"):
         cfg["cf_clearance"] = input("Enter cf_clearance cookie: ").strip()
