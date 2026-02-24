@@ -7,7 +7,8 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-TOKENS_FILE = "tokens.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TOKENS_FILE = os.path.abspath(os.path.join(BASE_DIR, "..", "tokens.json"))
 MAX_TOKENS = 10  # Maximum number of tokens to store
 
 
