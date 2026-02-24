@@ -42,7 +42,7 @@ DEFAULT_IMG_MODEL = "019abc10-e78d-7932-b725-7f1563ed8a12"
 # ---------------- reCAPTCHA CONSTANTS ---------------- #
 RECAPTCHA_V2_SITEKEY = "6Ld7ePYrAAAAAB34ovoFoDau1fqCJ6IyOjFEQaMn"
 RECAPTCHA_ACTION = "chat_submit"
-MAX_RECAPTCHA_ATTEMPTS = 3
+MAX_RECAPTCHA_ATTEMPTS = 2
 
 
 # ---------------- CONFIG EXTENSION ---------------- #
