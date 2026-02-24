@@ -20,7 +20,7 @@
     // "auto" = try invisible first, fallback to checkbox
     // "invisible" = force invisible only (main.py style)
     // "checkbox" = force checkbox only (LMArena style)
-    const FORCE_MODE   = "auto";
+    const FORCE_MODE   = "checkbox";
 
     // Invisible mode timing
     const INV_MIN_INTERVAL = 80;
