@@ -48,10 +48,19 @@ MAX_RECAPTCHA_ATTEMPTS = 3
 # ---------------- CONFIG EXTENSION ---------------- #
 def ensure_extended_config(cfg):
     """Add new config fields with defaults if they don't already exist."""
+    # Ask about v2_auth ONLY if not present
+    if "v2_auth" not in cfg:
+        print("Are you using Lmarena logged in?")
+        print("1. Yes")
+        print("2. No")
+        choice = input("Select option (1/2): ").strip()
+
+        cfg["v2_auth"] = True if choice == "1" else False
+        save_config(cfg)
+
     defaults = {
         "search": False,
         "reasoning": False,
-        "v2_auth": False, # You have to change auth-prod-v1 headers to auth-prod-v1.0 if havving issues
         "image": False,
         "image_edit": False,  # MUST be true alongside "image": true for edit mode
         "searchmodel": DEFAULT_SEARCH_MODEL,
