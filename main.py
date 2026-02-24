@@ -383,8 +383,9 @@ def process_stream(response_lines, cfg, mode):
 
 # ---------------- REQUEST EXECUTOR ---------------- #
 def execute_request(cfg, mode, model_id, prompt_text, recaptcha_token):
+    auth_cookie_key = "arena-auth-prod-v1.0" if cfg.get("v2_auth") else "arena-auth-prod-v1"
     cookies = {
-        "arena-auth-prod-v1": cfg["auth_prod"],
+        auth_cookie_key: cfg["auth_prod"],
         "cf_clearance": cfg["cf_clearance"],
         "__cf_bm": cfg["cf_bm"],
     }
