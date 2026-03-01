@@ -42,11 +42,11 @@ CUSTOM = True
 #   macOS Brave ........ "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 #   macOS Chrome ....... "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 #   macOS Chromium ..... "/Applications/Chromium.app/Contents/MacOS/Chromium"
-PATH = "/usr/bin/brave-browser"
+PATH = "/path/to/browser/must/be/chromium" # Brave is recommended
 
-N = 3  # number of windows (TABS=False) or tabs (TABS=True)
+N = 1  # number of windows (TABS=False) or tabs (TABS=True)
 
-EXTENSIONS = True
+EXTENSIONS = False
 # If EXTENSIONS=True you MUST set EXTENSIONS_DIR to the Extensions folder of
 # the browser profile you want to load extensions from.
 # Leave as "" only if EXTENSIONS=False.
@@ -68,9 +68,9 @@ EXTENSIONS = True
 #   macOS Brave ........ "/Users/USERNAME/Library/Application Support/BraveSoftware/Brave-Browser/Default/Extensions"
 #   macOS Chrome ....... "/Users/USERNAME/Library/Application Support/Google/Chrome/Default/Extensions"
 #   macOS Chromium ..... "/Users/USERNAME/Library/Application Support/Chromium/Default/Extensions"
-EXTENSIONS_DIR = "/root/.config/BraveSoftware/Brave-Browser/Default/Extensions"
+EXTENSIONS_DIR = "/path/to/extensions/" // Download RektCaptcha
 # Get Extensions file in Default/EXTESIONS from browser://version
-TABS = True   # False = N separate browser windows  |  True = N tabs in one window
+TABS = False   # False = N separate browser windows  |  True = N tabs in one window
 
 CUS_PROFILE = False
 # If CUS_PROFILE=True, ALL contexts/windows use PROFILE_PATH as their
@@ -129,7 +129,7 @@ COOKIE_V2 = ""
 # Paste the full value for the new arena-auth-prod-v1.1 cookie here.
 # Example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 
-SERVER_PORT = 5001
+SERVER_PORT = 5000
 # ============================================================
 
 PROFILES_DIR = Path("harvester_profiles")
