@@ -484,7 +484,7 @@ def execute_request(cfg, mode, model_id, prompt_text, recaptcha_token):
                 if cfg.get("Tokenizer"):
                     
                     # Pick correct cookie name based on v2_auth
-                    cookie_name = "arena-auth-prod-v1.1" if cfg.get("v2_auth") else "arena-auth-prod-v1"
+                    cookie_name = "arena-auth-prod-v1.0" if cfg.get("v2_auth") else "arena-auth-prod-v1"
 
                     new_token = response.cookies.get(cookie_name)
                     if new_token:
