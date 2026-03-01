@@ -4,7 +4,7 @@ reCAPTCHA Token Harvester
 Config at the top — edit before running.                                                                                                                                                                                                              Usage:
     pip install playwright fastapi uvicorn
     playwright install chromium
-    python harvester.py
+    python token.py
 Then open http://localhost:5000
 """
 
@@ -102,33 +102,6 @@ CUS_PROFILE = False
 #   That parent directory is what you put here.
 PROFILE_PATH = ""
 
-# ============================================================
-# COOKIE INJECTION — edit these when COOKIES=True
-# ============================================================
-
-COOKIES = False
-# When COOKIES=True, before running the blocker script on each context/window,
-# the harvester will perform three cookie operations on arena.ai:
-#
-#   1. Find the existing cookie named "arena-auth-prod-v1" and rename it to
-#      "arena-auth-prod-v1.0" (keeping all other attributes the same).
-#
-#   2. Set the value of "arena-auth-prod-v1.0" to COOKIE_V1 (defined below).
-#
-#   3. Add a brand-new cookie named "arena-auth-prod-v1.1" whose value is
-#      set to COOKIE_V2 (defined below).
-#
-# Both operations target the arena.ai domain so the cookies are sent with
-# every request to that site.
-
-COOKIE_V1 = ""
-# Paste the full value for the renamed/updated auth cookie here.
-# Example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-COOKIE_V2 = ""
-# Paste the full value for the new arena-auth-prod-v1.1 cookie here.
-# Example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
 SERVER_PORT = 5000
 # ============================================================
 
@@ -152,18 +125,6 @@ if CUS_PROFILE:
     if not _profile_path_obj.is_dir():
         raise RuntimeError(f"PROFILE_PATH is not a directory: {_profile_path_obj}")
     print(f"[profile] Using custom profile: {_profile_path_obj}")
-
-if COOKIES:
-    if not COOKIE_V1 or not COOKIE_V1.strip():
-        raise RuntimeError(
-            "COOKIES=True but COOKIE_V1 is empty.\n"
-            "Set COOKIE_V1 to the value for the arena-auth-prod-v1.0 cookie."
-        )
-    if not COOKIE_V2 or not COOKIE_V2.strip():
-        raise RuntimeError(
-            "COOKIES=True but COOKIE_V2 is empty.\n"
-            "Set COOKIE_V2 to the value for the new arena-auth-prod-v1.1 cookie."
-        )
 
 app = FastAPI()
 
@@ -1091,67 +1052,6 @@ async def mouse_mover(page: Page, window_id: int):
             break
 
 
-# ── Cookie injection helper ────────────────────────────────────
-
-async def inject_cookies(context: BrowserContext, window_id: int) -> None:
-    """
-    COOKIES mode — performs three operations on the arena.ai cookie jar
-    for the given context:
-
-      1. Find the cookie named "auth-prod-v1" and DELETE it (it will be
-         replaced under the new name in step 2).
-
-      2. Add / overwrite "arena-auth-prod-v1.0" with the value from COOKIE_V1,
-         preserving the domain / path / security attributes of the original
-         cookie when found, otherwise using safe defaults for arena.ai.
-
-      3. Add "arena-auth-prod-v1.1" with the value from COOKIE_V2 using the
-         same domain / path / security attributes.
-
-    This runs once per context/window, immediately before the blocker script.
-    """
-    label = "tab" if TABS else "window"
-    print(f"[{label} {window_id}] 🍪 Injecting cookies (COOKIES=True)...")
-
-    try:
-        # ── 1. Find and remove the old "auth-prod-v1" cookie ──────────────
-        all_cookies = await context.cookies()
-        old_cookie = next(
-            (c for c in all_cookies if c.get("name") == "arena-auth-prod-v1"),
-            None,
-        )
-
-        if old_cookie:
-            await context.clear_cookies(name="arena-auth-prod-v1")
-            print(f"[{label} {window_id}]   ✓ Removed auth-prod-v1")
-        else:
-            print(f"[{label} {window_id}]   ℹ auth-prod-v1 not found — will create with defaults")
-
-        # ── Derive base attributes from old cookie or use safe defaults ───
-        base: dict = {
-            "domain":   old_cookie.get("domain",   ".arena.ai") if old_cookie else ".arena.ai",
-            "path":     old_cookie.get("path",      "/")         if old_cookie else "/",
-            "secure":   old_cookie.get("secure",    True)        if old_cookie else True,
-            "httpOnly": old_cookie.get("httpOnly",  True)        if old_cookie else True,
-            "sameSite": old_cookie.get("sameSite",  "Lax")       if old_cookie else "Lax",
-        }
-        # Only include expires if the original had one (avoid session→persistent
-        # downgrade; also Playwright rejects expires=-1).
-        if old_cookie and old_cookie.get("expires", -1) > 0:
-            base["expires"] = old_cookie["expires"]
-
-        # ── 2. Set arena-auth-prod-v1.0 = COOKIE_V1 ──────────────────────
-        await context.add_cookies([{**base, "name": "arena-auth-prod-v1.0", "value": COOKIE_V1}])
-        print(f"[{label} {window_id}]   ✓ Set arena-auth-prod-v1.0")
-
-        # ── 3. Add arena-auth-prod-v1.1 = COOKIE_V2 ──────────────────────
-        await context.add_cookies([{**base, "name": "arena-auth-prod-v1.1", "value": COOKIE_V2}])
-        print(f"[{label} {window_id}]   ✓ Added arena-auth-prod-v1.1")
-
-    except Exception as e:
-        print(f"[{label} {window_id}] ⚠ Cookie injection error: {e}")
-
-
 # ── Browser launch ─────────────────────────────────────────────
 
 def _get_extension_args() -> list[str]:
@@ -1414,13 +1314,6 @@ async def setup_window(playwright, window_id: int):
     except Exception as e:
         print(f"[{label} {window_id}] Reload error: {e}")
 
-    # ── Cookie injection (COOKIES=True only) ──────────────────────
-    # Runs after the page has loaded its own cookies but before the blocker
-    # script, so arena.ai will see the injected credentials on subsequent
-    # requests without any script interference.
-    if COOKIES:
-        await inject_cookies(context, window_id)
-
     # Persist initial cookies/state for tabs
     if TABS:
         await _save_tab_cookies(window_id)
@@ -1529,7 +1422,6 @@ async def main():
     print(f"  Windows/Tabs: {N}")
     print(f"  Custom      : {CUSTOM}{(' → ' + PATH) if CUSTOM else ''}")
     print(f"  Extensions  : {EXTENSIONS}")
-    print(f"  Cookies     : {COOKIES}")
     print(f"  Dashboard   : http://localhost:{SERVER_PORT}")
     print("=" * 50)
 
