@@ -103,11 +103,31 @@ COOKIE_V2 = ""
 
 SERVER_PORT = 5000
 
+AUTO_LOGIN = True
+# When AUTO_LOGIN=True and COOKIES=False, the harvester will automatically
+# sign in to arena.ai for each browser window/tab using credentials you enter
+# in the terminal at startup.
+#
+# Login flow per window:
+#   1. Navigate to arena.ai
+#   2. Run initial v2 script
+#   3. POST to /nextjs-api/sign-in/email with email + password
+#   4. Extract arena-auth-prod-v1.0 and arena-auth-prod-v1.1 from response
+#      headers and persist them to config.json (auth_prod / auth_prod_v2)
+#   5. Reload page, run blocker script, continue as normal
+#
+# After ready: cf_clearance and __cf_bm cookies from the browser context are
+# also written to config.json automatically.
+#
+# NOTE: AUTO_LOGIN=True is incompatible with COOKIES=True — an error is raised
+#       at startup if both are enabled simultaneously.
+
 # ============================================================
 # TOKENS FILE — output compatible with modula.py / main.py
 # ============================================================
 
 TOKENS_FILE = "tokens.json"
+CONFIG_FILE  = "config.json"
 
 # ============================================================
 
@@ -143,6 +163,27 @@ if COOKIES:
             "COOKIES=True but COOKIE_V2 is empty.\n"
             "Set COOKIE_V2 to the value for the new arena-auth-prod-v1.1 cookie."
         )
+
+if AUTO_LOGIN and COOKIES:
+    raise RuntimeError(
+        "AUTO_LOGIN=True and COOKIES=True cannot be used together.\n"
+        "AUTO_LOGIN manages auth cookies itself via the sign-in API.\n"
+        "Set either AUTO_LOGIN=False (to use manual cookies) or COOKIES=False (to use auto-login)."
+    )
+
+# ── Collect AUTO_LOGIN credentials once at startup (before browser launch) ────
+_AUTO_LOGIN_EMAIL    = ""
+_AUTO_LOGIN_PASSWORD = ""
+
+if AUTO_LOGIN:
+    print("\n" + "=" * 55)
+    print("  AUTO_LOGIN enabled — enter arena.ai credentials")
+    print("  These will be used to sign in each browser window.")
+    print("=" * 55)
+    _AUTO_LOGIN_EMAIL    = input("  Email    : ").strip()
+    _AUTO_LOGIN_PASSWORD = input("  Password : ").strip()
+    if not _AUTO_LOGIN_EMAIL or not _AUTO_LOGIN_PASSWORD:
+        raise RuntimeError("AUTO_LOGIN=True but email or password was left blank.")
 
 app = FastAPI()
 
@@ -1075,6 +1116,174 @@ async def mouse_mover(page: Page, window_id: int):
             break  # page/context closed — exit gracefully
 
 
+# ── config.json patch helpers ─────────────────────────────────
+
+def _load_config_file() -> dict:
+    """Load config.json from disk. Returns empty dict if missing/corrupt."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_config_file(cfg: dict) -> None:
+    """Write config.json atomically."""
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, CONFIG_FILE)
+
+
+def _patch_config(updates: dict) -> None:
+    """Merge *updates* into config.json, preserving all existing keys."""
+    cfg = _load_config_file()
+    cfg.update(updates)
+    _save_config_file(cfg)
+    for k, v in updates.items():
+        preview = (v[:30] + "...") if isinstance(v, str) and len(v) > 30 else v
+        print(f"[config] {k} = {preview}")
+
+
+# ── AUTO_LOGIN sign-in helper ──────────────────────────────────
+
+async def auto_login_window(page: Page, context: BrowserContext, window_id: int) -> bool:
+    """
+    Perform the arena.ai email/password sign-in inside the browser page via
+    fetch(), then extract the two auth cookies from the response Set-Cookie
+    headers and persist them (plus cf_clearance / __cf_bm) to config.json.
+
+    Returns True on success, False on failure (window continues regardless).
+    """
+    label = "tab" if TABS else "window"
+    print(f"[{label} {window_id}] 🔐 AUTO_LOGIN: signing in as {_AUTO_LOGIN_EMAIL}...")
+
+    # Build the JS payload — credentials are interpolated server-side (Python),
+    # so they never appear in the browser console log.
+    email_escaped    = _AUTO_LOGIN_EMAIL.replace('"', '\\"')
+    password_escaped = _AUTO_LOGIN_PASSWORD.replace('"', '\\"')
+
+    login_script = f"""
+async () => {{
+    const resp = await fetch("https://arena.ai/nextjs-api/sign-in/email", {{
+        method: "POST",
+        headers: {{
+            "accept": "*/*",
+            "accept-language": "en-US,en;q=0.6",
+            "content-type": "application/json",
+            "priority": "u=1, i",
+            "sec-ch-ua": "\\"Brave\\";v=\\"143\\", \\"Chromium\\";v=\\"143\\", \\"Not A(Brand\\";v=\\"24\\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\\"Linux\\"",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "sec-gpc": "1"
+        }},
+        referrer: "https://arena.ai/",
+        body: JSON.stringify({{
+            email: "{email_escaped}",
+            password: "{password_escaped}",
+            shouldLinkHistory: false
+        }}),
+        credentials: "include"
+    }});
+
+    // Return status + all readable response headers as a plain object
+    const headers = {{}};
+    resp.headers.forEach((v, k) => {{ headers[k] = v; }});
+    let body = "";
+    try {{ body = await resp.text(); }} catch(_) {{}}
+    return {{ status: resp.status, headers, body }};
+}}
+"""
+
+    try:
+        result = await page.evaluate(login_script)
+    except Exception as e:
+        print(f"[{label} {window_id}] ⚠ AUTO_LOGIN fetch error: {e}")
+        return False
+
+    status = result.get("status", 0)
+    print(f"[{label} {window_id}]   Sign-in response status: {status}")
+
+    if status not in (200, 201, 204):
+        body_preview = result.get("body", "")[:200]
+        print(f"[{label} {window_id}] ⚠ AUTO_LOGIN failed (status {status}): {body_preview}")
+        return False
+
+    # ── Extract auth cookies from browser context (set via credentials:include) ─
+    # The browser automatically stores Set-Cookie headers when credentials:"include"
+    # is used, so we read them from the context after the fetch completes.
+    await asyncio.sleep(1)  # brief pause to let cookies settle
+
+    try:
+        all_cookies = await context.cookies(["https://arena.ai"])
+    except Exception as e:
+        print(f"[{label} {window_id}] ⚠ Could not read context cookies: {e}")
+        return False
+
+    cookie_map = {c["name"]: c["value"] for c in all_cookies}
+
+    updates: dict = {}
+
+    v10 = cookie_map.get("arena-auth-prod-v1.0", "")
+    v11 = cookie_map.get("arena-auth-prod-v1.1", "")
+    # Also accept plain v1 in case the site hasn't migrated this window yet
+    v1  = cookie_map.get("arena-auth-prod-v1",   "")
+
+    if v10:
+        updates["auth_prod"]    = v10
+        updates["auth_prod_v2"] = v11
+        updates["v2_auth"]      = True
+        print(f"[{label} {window_id}]   ✓ arena-auth-prod-v1.0 captured ({len(v10)} chars)")
+        if v11:
+            print(f"[{label} {window_id}]   ✓ arena-auth-prod-v1.1 captured ({len(v11)} chars)")
+    elif v1:
+        updates["auth_prod"] = v1
+        print(f"[{label} {window_id}]   ✓ arena-auth-prod-v1 captured ({len(v1)} chars)")
+    else:
+        print(f"[{label} {window_id}]   ⚠ No auth cookie found in context after login")
+
+    if updates:
+        _patch_config(updates)
+        print(f"[{label} {window_id}] ✅ AUTO_LOGIN: auth cookies saved to {CONFIG_FILE}")
+
+    return bool(updates)
+
+
+async def sync_cf_cookies_to_config(context: BrowserContext, window_id: int) -> None:
+    """
+    After a window is marked ready, find cf_clearance and __cf_bm cookies in
+    the browser context and write their values to config.json.
+    Called once per window when it transitions to 'ready'.
+    """
+    label = "tab" if TABS else "window"
+    try:
+        all_cookies = await context.cookies(["https://arena.ai"])
+    except Exception as e:
+        print(f"[{label} {window_id}] ⚠ cf-cookie sync failed (read): {e}")
+        return
+
+    cookie_map = {c["name"]: c["value"] for c in all_cookies}
+    updates: dict = {}
+
+    cf_clearance = cookie_map.get("cf_clearance", "")
+    cf_bm        = cookie_map.get("__cf_bm", "")
+
+    if cf_clearance:
+        updates["cf_clearance"] = cf_clearance
+        print(f"[{label} {window_id}]   ✓ cf_clearance synced ({len(cf_clearance)} chars)")
+    if cf_bm:
+        updates["cf_bm"] = cf_bm
+        print(f"[{label} {window_id}]   ✓ __cf_bm synced ({len(cf_bm)} chars)")
+
+    if updates:
+        _patch_config(updates)
+
+
 # ── Cookie injection helper ────────────────────────────────────
 
 async def inject_cookies(context: BrowserContext, window_id: int) -> None:
@@ -1294,6 +1503,11 @@ async def setup_window(playwright, window_id: int):
     except Exception as e:
         print(f"[{label} {window_id}] Initial script error: {e}")
 
+    # ── AUTO_LOGIN: sign in before reload ─────────────────────────
+    if AUTO_LOGIN:
+        await auto_login_window(page, context, window_id)
+        await asyncio.sleep(1)
+
     print(f"[{label} {window_id}] Reloading page...")
     try:
         await page.reload(wait_until="domcontentloaded")
@@ -1313,6 +1527,10 @@ async def setup_window(playwright, window_id: int):
     except Exception as e:
         print(f"[{label} {window_id}] Ready signal JS failed ({e}), marking directly")
         _windows[window_id]["status"] = "ready"
+
+    # ── Sync cf_clearance + __cf_bm to config.json ───────────────
+    if AUTO_LOGIN:
+        await sync_cf_cookies_to_config(context, window_id)
 
     await asyncio.sleep(1)
     print(f"[{label} {window_id}] Running blocker script...")
@@ -1396,6 +1614,7 @@ async def main():
     print(f"  Custom browser : {CUSTOM}{(' → ' + PATH) if CUSTOM else ''}")
     print(f"  Extensions     : {EXTENSIONS}")
     print(f"  Cookies mode   : {COOKIES}")
+    print(f"  Auto Login     : {AUTO_LOGIN}{(' (' + _AUTO_LOGIN_EMAIL + ')') if AUTO_LOGIN else ''}")
     print(f"  Output file    : {TOKENS_FILE}  (modula.py compatible)")
     print(f"  Dashboard      : http://localhost:{SERVER_PORT}")
     print("=" * 55)
