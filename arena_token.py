@@ -4,7 +4,7 @@ reCAPTCHA Token Harvester
 Config at the top — edit before running.                                                                                                                                                                                                              Usage:
     pip install playwright fastapi uvicorn
     playwright install chromium
-    python harvester.py
+    python arena_token.py
 Then open http://localhost:5000
 """
 
@@ -129,7 +129,7 @@ COOKIE_V2 = ""
 # Paste the full value for the new arena-auth-prod-v1.1 cookie here.
 # Example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 
-SERVER_PORT = 5000
+SERVER_PORT = 5001
 # ============================================================
 
 PROFILES_DIR = Path("harvester_profiles")
