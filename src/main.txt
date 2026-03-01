@@ -1,6 +1,6 @@
-const EVAL_ID = prompt("Enter EVAL_ID:");
+const EVAL_ID = "";
 const MODEL_A_ID = "019a98f7-afcd-779f-8dcb-856cc3b3f078";
-const toki = prompt("Paste recaptchaV3Token:");
+
 
 const payload = {
   id: EVAL_ID,
@@ -17,7 +17,7 @@ const payload = {
 
   modality: "chat",
 
-  recaptchaV3Token: toki
+  recaptchaV3Token: ""
 };
 
 const res = await fetch(
