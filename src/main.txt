@@ -21,7 +21,7 @@ const payload = {
 };
 
 const res = await fetch(
-  `https://lmarena.ai/nextjs-api/stream/post-to-evaluation/${EVAL_ID}`,
+  `https://arena.ai/nextjs-api/stream/post-to-evaluation/${EVAL_ID}`,
   {
     method: "POST",
     mode: "cors",
@@ -30,7 +30,7 @@ const res = await fetch(
       "accept": "*/*",
       "content-type": "text/plain;charset=UTF-8"
     },
-    referrer: `https://lmarena.ai/c/${EVAL_ID}`,
+    referrer: `https://arena.ai/c/${EVAL_ID}`,
     body: JSON.stringify(payload)
   }
 );
