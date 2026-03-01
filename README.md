@@ -1,8 +1,7 @@
 # ARENA-API-Beta
 Basic Arena API Currently in Beta Testing 
-# Reminder 
+# Reminder
 Progress 70 % Captcha Is Left To bypass which isnt possible in a fast and free way
-
 
 MOBILE IS SUPPORTED USE KIWI BROWSER OR ERUDA
 
