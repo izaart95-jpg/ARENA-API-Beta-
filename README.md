@@ -26,7 +26,9 @@ Start `arena_token.py` and wait for browser to be initialised open http://localh
 
 Now you can run main.py 
 
-Enter EvaluationId when prompted for eg if url is https://arena.ai/c/019c7e82-0302-7d9f-b74d-559ed21190fa then evalid is 019c7e82-0302-7d9f-b74d-559ed21190fa
+## Usage & Features - If you are having problems
+
+📺 [Watch the usage walkthrough on YouTube](https://youtu.be/hPmg9oMS3e8)
 
 
 ### Flags
@@ -134,10 +136,5 @@ Required when `COOKIES=True`. Retrieve these values from your browser's DevTools
 
 ---
 
-## Usage
 
-📺 [Watch the usage walkthrough on YouTube](https://www.youtube.com/watch?v=QFHfF0bMoi0)
 
-## Preview & Features
-
-📺 [Watch the feature preview on YouTube](https://www.youtube.com/watch?v=pmgOZFKTvdc)
