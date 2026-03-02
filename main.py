@@ -151,7 +151,7 @@ def get_image_data():
     image_bytes = None
     mime_type = "image/png"  # Default
 
-    if choice == "1":
+    if choice == "2":
         b64_string = input("Paste your Base64 string: ").strip()
         # Parse potential data URI scheme (e.g., data:image/jpeg;base64,...)
         if b64_string.startswith("data:"):
@@ -160,7 +160,7 @@ def get_image_data():
         
         image_bytes = base64.b64decode(b64_string)
 
-    elif choice == "2":
+    elif choice == "1":
         file_path = input("Enter full path to image: ").strip()
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Image not found at {file_path}")
@@ -190,7 +190,7 @@ def upload_image_handshake(client, cfg, image_bytes, mime_type):
     reserve_url = f"{BASE_URL}/c/{cfg['eval_id']}"
     
     headers = build_base_headers(cfg)
-    headers["next-action"] = "70148f200c4c966a37fe9f723d432b5ebfb00fa9a7"
+    headers["next-action"] = "7012303914af71fce235a732cde90253f7e2986f2b"
     headers["content-type"] = "application/json"
     
     # 1. Post to reserve slot
