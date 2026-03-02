@@ -55,6 +55,16 @@ AUTO_LOGIN = True
 FIVE_GAIN = False   # set to True to enable (AUTO_LOGIN must also be True)
 
 # ============================================================
+# TUNING — Reload page after each v2/v3 token is harvested
+# ============================================================
+# When True (default): after every v2 or v3 token the page reloads,
+# re-runs the blocker, re-marks ready, and re-injects the active harvester
+# script so harvesting continues automatically.
+# When False: tokens are stored normally with no page reload.
+
+TUNING = True
+
+# ============================================================
 # TOKENS FILE — output compatible with modula.py / main.py
 # ============================================================
 
@@ -969,7 +979,8 @@ async def store_token(request: Request):
     # ── Auto-reload: triggered for v2 and v3 harvester tokens only ──────────
     # Excluded: v2_initial (initial page load) and v2_ondemand (invisible/manual).
     # Included: version == "v2" (checkbox/invisible harvester) or "v3".
-    should_reload = data.get("_reload_after", False) and version in ("v2", "v3")
+    # Gated by TUNING=True — set False to disable all post-token reloads.
+    should_reload = TUNING and data.get("_reload_after", False) and version in ("v2", "v3")
     if should_reload:
         window_id = data.get("window_id", -1)
         # Find the window by id or fall back to scanning all windows
@@ -988,8 +999,10 @@ async def store_token(request: Request):
 async def _reload_window_after_token(window_id: int, version: str):
     """
     Reload a window/tab after a v2 or v3 token is harvested, then
-    re-run the full ready flow (blocker, ready signal, cf cookies, mouse mover).
+    re-run the full ready flow (blocker, ready signal, cf cookies, mouse mover)
+    and re-inject the active harvester script so harvesting continues automatically.
     If FIVE_GAIN is active the final navigation targets arena.ai/c/<eval_id>.
+    Only runs when TUNING=True.
     """
     label = "tab" if TABS else "window"
     w = _windows.get(window_id)
@@ -999,6 +1012,14 @@ async def _reload_window_after_token(window_id: int, version: str):
     page: Page    = w.get("page")
     context       = w.get("context")
     prev_status   = w.get("status", "ready")
+
+    # If the stop button was clicked while the token POST was in-flight,
+    # active_script will be None — bail out, no reload.
+    active_script  = w.get("active_script")
+    active_version = w.get("active_version")
+    if not active_script or not active_version:
+        print(f"[{label} {window_id}] Harvester was stopped — skipping reload.")
+        return
 
     if not page or not context:
         return
@@ -1035,9 +1056,23 @@ async def _reload_window_after_token(window_id: int, version: str):
         await page.evaluate(READY_SIGNAL_SCRIPT, window_id)
     except Exception as e:
         print(f"[{label} {window_id}] Post-reload ready signal error: {e}")
-        _windows[window_id]["status"] = "ready"
+        _windows[window_id]["status"] = active_version == "v2" and "harvesting_v2" or "harvesting_v3"
 
-    print(f"[{label} {window_id}] ✅ Reload complete — back to ready.")
+    # Re-check: if stop was clicked during the reload, don't re-inject
+    if _windows[window_id].get("active_script") is None:
+        print(f"[{label} {window_id}] Harvester stopped during reload — not re-injecting.")
+        return
+
+    # Re-inject the harvester script so it keeps running
+    print(f"[{label} {window_id}] 💉 Re-injecting {active_version} harvester script...")
+    try:
+        await page.evaluate(active_script)
+        status = "harvesting_v2" if active_version == "v2" else "harvesting_v3"
+        _windows[window_id]["status"] = status
+        print(f"[{label} {window_id}] ✅ Reload complete — {active_version} harvester running.")
+    except Exception as e:
+        print(f"[{label} {window_id}] Re-inject error: {e}")
+        _windows[window_id]["status"] = "ready"
 
 
 @app.get("/api/tokens")
@@ -1120,6 +1155,8 @@ async def v2_start(window_id: int):
         )
         await w["page"].evaluate(script)
         w["status"] = "harvesting_v2"
+        w["active_script"] = script          # remember for post-reload re-injection
+        w["active_version"] = "v2"
         return {"ok": True, "status": "harvesting_v2"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1133,6 +1170,8 @@ async def v2_stop(window_id: int):
     try:
         await w["page"].evaluate("if (typeof window.__STOP_V2_HARVEST__ === 'function') window.__STOP_V2_HARVEST__();")
         w["status"] = "idle"
+        w["active_script"]  = None
+        w["active_version"] = None
         return {"ok": True, "status": "idle"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1152,6 +1191,8 @@ async def v3_start(window_id: int):
         )
         await w["page"].evaluate(script)
         w["status"] = "harvesting_v3"
+        w["active_script"] = script          # remember for post-reload re-injection
+        w["active_version"] = "v3"
         return {"ok": True, "status": "harvesting_v3"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1165,6 +1206,8 @@ async def v3_stop(window_id: int):
     try:
         await w["page"].evaluate("if (typeof window.__STOP_HARVEST__ === 'function') window.__STOP_HARVEST__();")
         w["status"] = "idle"
+        w["active_script"]  = None
+        w["active_version"] = None
         return {"ok": True, "status": "idle"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1738,6 +1781,7 @@ async def main():
     print(f"  Cookies mode   : {COOKIES}")
     print(f"  Auto Login     : {AUTO_LOGIN}{(' (' + _AUTO_LOGIN_EMAIL + ')') if AUTO_LOGIN else ''}")
     print(f"  5_GAIN         : {FIVE_GAIN}{(' → arena.ai/c/' + _EVAL_ID) if FIVE_GAIN and _EVAL_ID else ''}")
+    print(f"  Tuning (reload): {TUNING}")
     print(f"  Output file    : {TOKENS_FILE}  (modula.py compatible)")
     print(f"  Dashboard      : http://localhost:{SERVER_PORT}")
     print("=" * 55)
