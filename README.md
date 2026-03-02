@@ -4,7 +4,7 @@
 
 ---
 
-## Quickstart
+## Quickstart - Install Dependencies
 ```bash
 git clone https://github.com/izaart95-jpg/ARENA-API-Beta.git
 cd ARENA-API-Beta
