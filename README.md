@@ -14,6 +14,8 @@ playwright install chromium
 
 ---
 
+### Note - arena_token.py is recommended over camoufox_harvester also camoufox_harvester is experimental 
+
 ## Configuration
 
 Open `arena_token.py` and edit the configuration block at the top of the file.
@@ -141,3 +143,9 @@ Required when `COOKIES=True`. Retrieve these values from your browser's DevTools
 
 ---
 
+### Camoufox_harvester 
+####  Usage:
+```bash  
+    pip install "camoufox[geoip]" browserforge fastapi uvicorn
+    camoufox fetch                  # download Firefox binary once
+    python camoufox_harvester.py
