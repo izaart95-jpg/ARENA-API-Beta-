@@ -9,7 +9,7 @@
 
 #### [Kimi-Bridge - Kimi Api](https://github.com/izaart95-jpg/Kimi-Bridge)
 
-#### [GLM-Bridge - GLM Bridge](https://github.com/izaart95-jpg/GLM-Bridge)
+#### [GLM-Bridge - GLM API Bridge](https://github.com/izaart95-jpg/GLM-Bridge)
 
 ## Quickstart - Install Dependencies
 ```bash
