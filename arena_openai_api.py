@@ -5,28 +5,24 @@ Wraps arena_client.py logic into a FastAPI server that speaks the
 OpenAI /v1/chat/completions streaming protocol so tools like opencode
 can use it as a drop-in backend.
 
-Setup:
-    pip install fastapi uvicorn httpx
-
-Run:
-    uvicorn arena_openai_api:app --host 0.0.0.0 --port 8000
+Setup:   pip install fastapi uvicorn httpx
+Run:     uvicorn arena_openai_api:app --host 0.0.0.0 --port 8000
 
 Configure opencode (or any OpenAI-compatible client):
     base_url = "http://localhost:8000/v1"
-    api_key  = "any-string"        # not validated, just required by clients
-    model    = "arena"             # or whatever you like -- it's ignored internally
+    api_key  = "any-string"   # not validated, just required by clients
+    model    = "arena"        # ignored internally
 
-Config flags:
-    MARKParser  (bool, default True)  – strip all markdown from streamed tokens.
-    CodeParser  (bool, default False) – only active when MARKParser is True;
-                                        makes the parser ONLY remove fenced code-block
-                                        fences (``` lines) and leave all other markdown
-                                        formatting intact.
+Per-request overrides (extra fields in the JSON body):
+    image      = true              → image generation mode
+    image_edit = true              → image edit mode  (requires image=true)
+    image_path = "/full/path.png"  → source image for image_edit
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
@@ -51,12 +47,43 @@ from modula import (
     AUTO_TOKEN,
 )
 
-# -- constants ---------------------------------------------------------------
-DEFAULT_SEARCH_MODEL   = "019c6f55-308b-71ac-95af-f023a48253cf"
-DEFAULT_THINK_MODEL    = "019c2f86-74db-7cc3-baa5-6891bebb5999"
-DEFAULT_IMG_MODEL      = "019abc10-e78d-7932-b725-7f1563ed8a12"
+
+# ============================================================
+# ✏️  USER CONFIGURATION  –  edit anything in this section
+# ============================================================
+
+# --- Server -----------------------------------------------------------------
+SERVER_HOST            = "0.0.0.0"   # bind address
+SERVER_PORT            = 8000        # port uvicorn listens on
+
+# --- Model IDs --------------------------------------------------------------
+DEFAULT_SEARCH_MODEL   = "019c6f55-308b-71ac-95af-f023a48253cf"  # search / web
+DEFAULT_THINK_MODEL    = "019c2f86-74db-7cc3-baa5-6891bebb5999"  # reasoning
+DEFAULT_IMG_MODEL      = "019abc10-e78d-7932-b725-7f1563ed8a12"  # image
+
+# --- Image upload -----------------------------------------------------------
+# The next-action token for the Arena image-upload handshake endpoint
+IMAGE_UPLOAD_NEXT_ACTION = "7012303914af71fce235a732cde90253f7e2986f2b"
+
+# --- reCAPTCHA --------------------------------------------------------------
 RECAPTCHA_ACTION       = "chat_submit"
-MAX_RECAPTCHA_ATTEMPTS = 2
+MAX_RECAPTCHA_ATTEMPTS = 2    # retries on captcha failure before giving up
+
+# --- Markdown parser --------------------------------------------------------
+# MARKParser – strip markdown from streamed output before it reaches the client.
+#   True  → markdown is removed
+#   False → raw output, nothing changed
+MARK_PARSER_DEFAULT    = True
+
+# CodeParser – only active when MARKParser is True.
+#   True  → ONLY strip fenced code-block delimiters (``` lines);
+#            bold / headings / links / etc. are left untouched.
+#   False → strip ALL markdown (full mode)
+CODE_PARSER_DEFAULT    = False
+
+# ============================================================
+# end of user configuration
+# ============================================================
 
 app = FastAPI(title="Arena OpenAI Bridge")
 
@@ -94,6 +121,15 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = True
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    # ── Per-request Arena mode overrides ─────────────────────────────────────
+    # These take priority over whatever flags are set in the JSON config file.
+    #
+    #   image generation:  { "image": true }
+    #   image edit:        { "image": true, "image_edit": true,
+    #                        "image_path": "/absolute/path/to/source.png" }
+    image:      Optional[bool] = None
+    image_edit: Optional[bool] = None
+    image_path: Optional[str]  = None
 
 
 # ============================================================
@@ -102,13 +138,16 @@ class ChatCompletionRequest(BaseModel):
 
 def _ensure_config(cfg: dict) -> dict:
     defaults = {
-        "v2_auth": False, "search": False, "reasoning": False,
-        "image": False, "image_edit": False,
+        "v2_auth":    False,
+        "search":     False,
+        "reasoning":  False,
+        "image":      False,
+        "image_edit": False,
         "searchmodel": DEFAULT_SEARCH_MODEL,
         "thinkmodel":  DEFAULT_THINK_MODEL,
         "imgmodel":    DEFAULT_IMG_MODEL,
-        "MARKParser":  True,   # strip markdown from streamed output by default
-        "CodeParser":  False,  # when True (+ MARKParser), ONLY strip fenced code blocks
+        "MARKParser":  MARK_PARSER_DEFAULT,
+        "CodeParser":  CODE_PARSER_DEFAULT,
     }
     changed = any(k not in cfg for k in defaults)
     for k, v in defaults.items():
@@ -118,9 +157,18 @@ def _ensure_config(cfg: dict) -> dict:
     return cfg
 
 
-def _detect_mode(cfg: dict) -> str:
-    if cfg.get("image"):
-        return "image_edit" if cfg.get("image_edit") else "image"
+def _detect_mode(cfg: dict,
+                 override_image: bool | None = None,
+                 override_image_edit: bool | None = None) -> str:
+    """
+    Detect mode from config, with optional per-request overrides.
+    Request-level override > config file flag.
+    """
+    use_image      = override_image      if override_image      is not None else cfg.get("image", False)
+    use_image_edit = override_image_edit if override_image_edit is not None else cfg.get("image_edit", False)
+
+    if use_image:
+        return "image_edit" if use_image_edit else "image"
     if cfg.get("search"):    return "search"
     if cfg.get("reasoning"): return "reasoning"
     return "chat"
@@ -176,21 +224,96 @@ def _search_headers(cfg: dict) -> dict:
 
 
 # ============================================================
+# Image upload helpers
+# ============================================================
+
+_MIME_MAP = {
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".webp": "image/webp",
+    ".gif":  "image/gif",
+}
+
+
+def _load_image_from_path(file_path: str) -> tuple[bytes, str]:
+    """Read an image from disk. Returns (image_bytes, mime_type)."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Image not found: {file_path}")
+    ext  = os.path.splitext(file_path)[1].lower()
+    mime = _MIME_MAP.get(ext, "image/png")
+    with open(file_path, "rb") as f:
+        return f.read(), mime
+
+
+def _upload_image_handshake(client: httpx.Client,
+                             cfg: dict,
+                             image_bytes: bytes,
+                             mime_type: str) -> str:
+    """
+    Execute the Arena 2-step image upload handshake (synchronous – run in
+    executor alongside _do_request). Returns the signed Cloudflare URL used
+    as the attachment URL in the payload.
+
+    Step 1: POST to the eval page with next-action header → get a signed URL.
+    Step 2: PUT image bytes to that signed URL.
+    """
+    reserve_url = f"{BASE_URL}/c/{cfg['eval_id']}"
+    headers = _base_headers(cfg)
+    headers["next-action"]  = IMAGE_UPLOAD_NEXT_ACTION
+    headers["content-type"] = "application/json"
+
+    res = client.post(
+        reserve_url,
+        headers=headers,
+        content=json.dumps(["image.png", mime_type]).encode(),
+    )
+    res.raise_for_status()
+
+    match = re.search(
+        r'https://[^\s"\'\\]+\.cloudflarestorage\.com[^\s"\'\\]+', res.text
+    )
+    if not match:
+        raise RuntimeError("Failed to extract signed URL from upload handshake response.")
+    signed_url = match.group(0).replace("\\u0026", "&")
+
+    upload_res = client.put(
+        signed_url,
+        headers={"Content-Type": mime_type},
+        content=image_bytes,
+    )
+    upload_res.raise_for_status()
+    return signed_url
+
+
+# ============================================================
 # Payload builder
 # ============================================================
 
 def _build_payload(cfg: dict, mode: str, model_id: str,
-                   prompt: str, recaptcha_token: str) -> dict:
-    modality = ("image" if mode in ("image", "image_edit")
-                else "search" if mode == "search" else "chat")
+                   prompt: str, recaptcha_token: str,
+                   attachment_url: str | None = None,
+                   mime_type: str | None = None) -> dict:
+    modality = (
+        "image"  if mode in ("image", "image_edit")
+        else "search" if mode == "search"
+        else "chat"
+    )
+    attachments = []
+    if attachment_url and mime_type:
+        attachments.append({
+            "name":        "image.png",
+            "contentType": mime_type,
+            "url":         attachment_url,
+        })
     return {
         "id":              cfg["eval_id"],
         "modelAId":        model_id,
         "userMessageId":   str(uuid.uuid4()),
         "modelAMessageId": str(uuid.uuid4()),
         "userMessage": {
-            "content":                  prompt,   # always a plain str
-            "experimental_attachments": [],
+            "content":                  prompt,
+            "experimental_attachments": attachments,
             "metadata":                 {},
         },
         "modality":         modality,
@@ -219,7 +342,7 @@ def _get_token() -> str:
 
 
 # ============================================================
-# SSE helpers
+# SSE / chunk helpers
 # ============================================================
 
 def _decode_token(raw: str) -> str:
@@ -233,159 +356,165 @@ def _decode_token(raw: str) -> str:
 
 def _openai_chunk(content: str, finish: bool = False) -> str:
     if finish:
-        obj = {"id": "chatcmpl-arena", "object": "chat.completion.chunk",
-               "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+        obj = {
+            "id": "chatcmpl-arena", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
     else:
-        obj = {"id": "chatcmpl-arena", "object": "chat.completion.chunk",
-               "choices": [{"index": 0,
-                             "delta": {"role": "assistant", "content": content},
-                             "finish_reason": None}]}
+        obj = {
+            "id": "chatcmpl-arena", "object": "chat.completion.chunk",
+            "choices": [{"index": 0,
+                         "delta": {"role": "assistant", "content": content},
+                         "finish_reason": None}],
+        }
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def _reasoning_chunk(token: str) -> str:
+    """Reasoning/thinking tokens – non-standard delta field, compatible with
+    clients that support reasoning_content (e.g. opencode with reasoning mode)."""
+    obj = {
+        "id": "chatcmpl-arena", "object": "chat.completion.chunk",
+        "choices": [{"index": 0,
+                     "delta": {"role": "assistant", "reasoning_content": token},
+                     "finish_reason": None}],
+    }
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def _citation_chunk(citation: dict) -> str:
+    obj = {
+        "id": "chatcmpl-arena", "object": "chat.completion.chunk",
+        "choices": [{"index": 0,
+                     "delta": {"citations": [citation]},
+                     "finish_reason": None}],
+    }
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def _image_chunk(image_url: str, mime_type: str = "image/png") -> str:
+    """Image generation result – OpenAI image-response envelope."""
+    obj = {"data": [{"url": image_url, "revised_prompt": None}]}
     return f"data: {json.dumps(obj)}\n\n"
 
 
 # ============================================================
-# Markdown / CodeFence parsers
+# Citation accumulator  (search mode)
+# ============================================================
+
+class _CitationAccumulator:
+    """Reassembles streamed citation JSON fragments arriving on the ac prefix."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, raw_data: str) -> dict | None:
+        try:
+            outer = json.loads(raw_data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if outer.get("toolCallId") != "citation-source":
+            return None
+        self._buf += outer.get("argsTextDelta", "")
+        try:
+            citation  = json.loads(self._buf)
+            self._buf = ""
+            return citation
+        except json.JSONDecodeError:
+            return None
+
+
+# ============================================================
+# Markdown / CodeFence parser
 # ============================================================
 
 class _StreamMarkdownStripper:
     """
     Stateful, token-by-token markdown stripper.
 
-    Accumulates tokens into a buffer, applies the chosen stripping mode,
-    and flushes clean text back to the caller.
-
     Modes
     -----
-    MARKParser=True, CodeParser=False  →  strip ALL markdown syntax.
-    MARKParser=True, CodeParser=True   →  strip ONLY fenced code-block
-                                          delimiters (``` lines); everything
-                                          else is left untouched.
-    MARKParser=False                   →  pass-through, no processing.
+    MARKParser=True,  CodeParser=False  →  strip ALL markdown syntax.
+    MARKParser=True,  CodeParser=True   →  strip ONLY fenced code-block
+                                           delimiters (``` lines).
+    MARKParser=False                    →  pass-through, nothing changed.
     """
 
-    # Compiled once at class level
-    _FENCE_LINE   = re.compile(r'^```[^\n]*\n?')          # opening/closing fence
-    _HEADING      = re.compile(r'^#{1,6}\s+', re.M)
-    _BOLD_ITALIC  = re.compile(r'\*{1,3}([^*\n]+)\*{1,3}')
-    _UNDER_BI     = re.compile(r'_{1,3}([^_\n]+)_{1,3}')
-    _STRIKE       = re.compile(r'~~([^~\n]+)~~')
-    _INLINE_CODE  = re.compile(r'`{1,2}([^`]+)`{1,2}')
-    _BLOCKQUOTE   = re.compile(r'^\s*>\s?', re.M)
-    _HR           = re.compile(r'^[-*_]{3,}\s*$', re.M)
-    _IMAGE        = re.compile(r'!\[([^\]]*)\]\([^)]*\)')
-    _LINK         = re.compile(r'\[([^\]]+)\]\([^)]+\)')
-    _REF_LINK     = re.compile(r'\[([^\]]+)\]\[[^\]]*\]')
-    _LINK_DEF     = re.compile(r'^\[[^\]]+\]:\s+\S+.*$', re.M)
-    _UL           = re.compile(r'^\s*[-*+]\s+', re.M)
-    _OL           = re.compile(r'^\s*\d+\.\s+', re.M)
-    _TABLE_SEP    = re.compile(r'^\|?[\s:|-]+\|[\s:|-]*\|?\s*$', re.M)
-    _TABLE_PIPE   = re.compile(r'\|')
-    _MULTI_BLANK  = re.compile(r'\n{3,}')
+    _HEADING     = re.compile(r'^#{1,6}\s+', re.M)
+    _BOLD_ITALIC = re.compile(r'\*{1,3}([^*\n]+)\*{1,3}')
+    _UNDER_BI    = re.compile(r'_{1,3}([^_\n]+)_{1,3}')
+    _STRIKE      = re.compile(r'~~([^~\n]+)~~')
+    _INLINE_CODE = re.compile(r'`{1,2}([^`]+)`{1,2}')
+    _BLOCKQUOTE  = re.compile(r'^\s*>\s?', re.M)
+    _HR          = re.compile(r'^[-*_]{3,}\s*$', re.M)
+    _IMAGE       = re.compile(r'!\[([^\]]*)\]\([^)]*\)')
+    _LINK        = re.compile(r'\[([^\]]+)\]\([^)]+\)')
+    _REF_LINK    = re.compile(r'\[([^\]]+)\]\[[^\]]*\]')
+    _LINK_DEF    = re.compile(r'^\[[^\]]+\]:\s+\S+.*$', re.M)
+    _UL          = re.compile(r'^\s*[-*+]\s+', re.M)
+    _OL          = re.compile(r'^\s*\d+\.\s+', re.M)
+    _TABLE_SEP   = re.compile(r'^\|?[\s:|-]+\|[\s:|-]*\|?\s*$', re.M)
+    _TABLE_PIPE  = re.compile(r'\|')
+    _MULTI_BLANK = re.compile(r'\n{3,}')
 
-    def __init__(self, mark_parser: bool, code_parser: bool):
-        self.mark_parser  = mark_parser
-        # CodeParser is only meaningful when MARKParser is also on
-        self.code_parser  = code_parser and mark_parser
-        self._buf         = ""           # rolling accumulation buffer
-        self._in_fence    = False        # are we inside a fenced block?
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def __init__(self, mark_parser: bool, code_parser: bool) -> None:
+        self.mark_parser = mark_parser
+        self.code_parser = code_parser and mark_parser
+        self._buf        = ""
+        self._in_fence   = False
 
     def feed(self, token: str) -> str:
-        """Accept one streamed token; return immediately-flushable clean text."""
         if not self.mark_parser:
-            return token                 # pass-through
-
+            return token
         self._buf += token
-
-        # We need a newline boundary to safely process lines that contain
-        # markdown syntax (headings, fences, etc.).  Hold back the last
-        # incomplete line so we never accidentally split a pattern.
         if "\n" in self._buf:
             safe, self._buf = self._buf.rsplit("\n", 1)
             return self._process(safe + "\n")
         return ""
 
     def flush(self) -> str:
-        """Call once after the stream ends to drain any buffered remainder."""
         if not self.mark_parser or not self._buf:
             return ""
         out, self._buf = self._process(self._buf), ""
         return out
 
-    # ------------------------------------------------------------------
-    # Internal processing
-    # ------------------------------------------------------------------
-
     def _process(self, text: str) -> str:
-        if self.code_parser:
-            return self._strip_fences_only(text)
-        return self._strip_all(text)
+        return self._strip_fences_only(text) if self.code_parser else self._strip_all(text)
 
     def _strip_fences_only(self, text: str) -> str:
-        """Remove ``` opening/closing fence lines; keep everything else verbatim."""
-        lines = text.split("\n")
-        out   = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                # Toggle fence state; swallow the delimiter line entirely
+        out = []
+        for line in text.split("\n"):
+            if line.strip().startswith("```"):
                 self._in_fence = not self._in_fence
-                continue          # drop the fence line itself
+                continue
             out.append(line)
         return "\n".join(out)
 
     def _strip_all(self, text: str) -> str:
-        """Full markdown removal (same rules as strip_markdown.py)."""
-        # Fenced code blocks → keep inner content
-        def _unwrap_fence(m: re.Match) -> str:
-            self._in_fence = False   # reset after full block consumed
-            return m.group(1)
-
-        # Multi-line fenced blocks accumulate across tokens; handle open fences
-        # by stripping the delimiter line and tracking state.
-        lines, out = text.split("\n"), []
         result_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("```"):
+        for line in text.split("\n"):
+            if line.strip().startswith("```"):
                 self._in_fence = not self._in_fence
-                continue          # always drop fence delimiter
+                continue
             result_lines.append(line)
         text = "\n".join(result_lines)
-
-        # Inline code
         text = self._INLINE_CODE.sub(r'\1', text)
-        # HTML tags
         text = re.sub(r'<[^>]+>', '', text)
-        # ATX headings
         text = self._HEADING.sub('', text)
-        # Bold / italic
         text = self._BOLD_ITALIC.sub(r'\1', text)
         text = self._UNDER_BI.sub(r'\1', text)
-        # Strikethrough
         text = self._STRIKE.sub(r'\1', text)
-        # Blockquotes
         text = self._BLOCKQUOTE.sub('', text)
-        # Horizontal rules
         text = self._HR.sub('', text)
-        # Images (keep alt text)
         text = self._IMAGE.sub(r'\1', text)
-        # Links (keep link text)
         text = self._LINK.sub(r'\1', text)
         text = self._REF_LINK.sub(r'\1', text)
         text = self._LINK_DEF.sub('', text)
-        # List markers
         text = self._UL.sub('', text)
         text = self._OL.sub('', text)
-        # Tables
         text = self._TABLE_SEP.sub('', text)
         text = self._TABLE_PIPE.sub(' ', text)
-        # Collapse excess blank lines
         text = self._MULTI_BLANK.sub('\n\n', text)
-
         return text
 
 
@@ -393,17 +522,23 @@ class _StreamMarkdownStripper:
 # Core streaming generator
 # ============================================================
 
-async def _stream_arena(prompt: str) -> AsyncIterator[str]:
+async def _stream_arena(
+    prompt: str,
+    override_image:      bool | None = None,
+    override_image_edit: bool | None = None,
+    image_path:          str  | None = None,
+) -> AsyncIterator[str]:
+
     cfg      = load_config()
     cfg      = _ensure_config(cfg)
-    mode     = _detect_mode(cfg)
+    mode     = _detect_mode(cfg, override_image, override_image_edit)
     model_id = _resolve_model(cfg, mode)
 
-    # Instantiate the stateful parser once per request
     parser = _StreamMarkdownStripper(
-        mark_parser=cfg.get("MARKParser", True),
-        code_parser=cfg.get("CodeParser", False),
+        mark_parser=cfg.get("MARKParser", MARK_PARSER_DEFAULT),
+        code_parser=cfg.get("CodeParser", CODE_PARSER_DEFAULT),
     )
+    citation_acc = _CitationAccumulator() if mode == "search" else None
 
     recaptcha_token = _get_token()
 
@@ -418,14 +553,14 @@ async def _stream_arena(prompt: str) -> AsyncIterator[str]:
         cookies["arena-auth-prod-v1.1"]       = cfg.get("auth_prod_v2", "")
 
     url     = f"{BASE_URL}/nextjs-api/stream/post-to-evaluation/{cfg['eval_id']}"
-    headers = _search_headers(cfg) if mode in ("search", "image", "image_edit") \
-              else _chat_headers(cfg)
-
+    headers = (
+        _search_headers(cfg)
+        if mode in ("search", "image", "image_edit")
+        else _chat_headers(cfg)
+    )
     if recaptcha_token:
         headers["X-Recaptcha-Token"]  = recaptcha_token
         headers["X-Recaptcha-Action"] = RECAPTCHA_ACTION
-
-    payload = _build_payload(cfg, mode, model_id, prompt, recaptcha_token)
 
     loop = asyncio.get_event_loop()
 
@@ -433,17 +568,41 @@ async def _stream_arena(prompt: str) -> AsyncIterator[str]:
         chunks: list = []
 
         with httpx.Client(http2=True, timeout=None, cookies=cookies) as client:
+
+            # ── Image upload handshake (image_edit only) ─────────────────────
+            attachment_url: str | None = None
+            attach_mime:    str | None = None
+
+            if mode == "image_edit":
+                if not image_path:
+                    chunks.append("__ERROR__:image_edit requires image_path in request body.")
+                    return chunks
+                try:
+                    img_bytes, attach_mime = _load_image_from_path(image_path)
+                    attachment_url = _upload_image_handshake(
+                        client, cfg, img_bytes, attach_mime
+                    )
+                except Exception as exc:
+                    chunks.append(f"__ERROR__:Image upload failed: {exc}")
+                    return chunks
+
+            payload = _build_payload(
+                cfg, mode, model_id, prompt, recaptcha_token,
+                attachment_url, attach_mime,
+            )
+
             for attempt in range(MAX_RECAPTCHA_ATTEMPTS):
-                # Always hand httpx raw bytes — no Python objects can leak in.
                 req_headers = dict(headers)
+                body_bytes  = json.dumps(payload).encode("utf-8")
+
+                # search / image modes require text/plain content-type
                 if mode not in ("search", "image", "image_edit"):
                     req_headers["content-type"] = "application/json"
-                body_bytes = json.dumps(payload).encode("utf-8")
-                stream_ctx = client.stream("POST", url,
-                                           headers=req_headers,
-                                           content=body_bytes)
 
-                with stream_ctx as response:
+                with client.stream("POST", url,
+                                   headers=req_headers,
+                                   content=body_bytes) as response:
+
                     if response.status_code != 200:
                         error_body = (b"".join(response.iter_bytes())
                                       .decode("utf-8", errors="replace"))
@@ -470,11 +629,10 @@ async def _stream_arena(prompt: str) -> AsyncIterator[str]:
                             chunks.append(f"__ERROR__:reCAPTCHA failed: {error_body[:200]}")
                             return chunks
 
-                        chunks.append(
-                            f"__ERROR__:Arena {response.status_code}: {error_body[:200]}"
-                        )
+                        chunks.append(f"__ERROR__:Arena {response.status_code}: {error_body[:200]}")
                         return chunks
 
+                    # ── Refresh auth cookie if Tokenizer flag is on ──────────
                     if cfg.get("Tokenizer"):
                         new_tok = response.cookies.get(auth_key)
                         if new_tok:
@@ -495,6 +653,8 @@ async def _stream_arena(prompt: str) -> AsyncIterator[str]:
     for raw_line in raw_lines:
         if not raw_line:
             continue
+
+        # Hard error injected by _do_request
         if raw_line.startswith("__ERROR__:"):
             yield _openai_chunk(raw_line[len("__ERROR__:"):])
             break
@@ -504,18 +664,52 @@ async def _stream_arena(prompt: str) -> AsyncIterator[str]:
             continue
         prefix, data = m.group(1), m.group(2).strip()
 
+        # ad → stream finished
         if prefix == "ad":
             break
+
+        # a0 → main text token
         if prefix == "a0":
             token = _decode_token(data)
             if token and not should_filter_content(token):
-                # Feed through the stateful parser; emit only non-empty output
                 cleaned = parser.feed(token)
                 if cleaned:
                     yield _openai_chunk(cleaned)
-        # ag / ac / a2 silently dropped
+            continue
 
-    # Flush any remaining buffered text
+        # ag → reasoning / thinking token
+        if prefix == "ag":
+            if mode == "reasoning":
+                token = _decode_token(data)
+                if token and not should_filter_content(token):
+                    yield _reasoning_chunk(token)
+            continue
+
+        # ac → citation fragment (search mode)
+        if prefix == "ac":
+            if mode == "search" and citation_acc is not None:
+                citation = citation_acc.feed(data)
+                if citation is not None:
+                    yield _citation_chunk(citation)
+            continue
+
+        # a2 → image generation result
+        if prefix == "a2":
+            if mode in ("image", "image_edit"):
+                try:
+                    items = json.loads(data)
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, dict) and item.get("type") == "image":
+                                img_url  = item.get("image", "")
+                                img_mime = item.get("mimeType", "image/png")
+                                if img_url:
+                                    yield _image_chunk(img_url, img_mime)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            continue
+
+    # Flush any remaining buffered markdown
     tail = parser.flush()
     if tail:
         yield _openai_chunk(tail)
@@ -542,14 +736,19 @@ async def list_models():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """
-    OpenAI-compatible streaming chat endpoint.
-    Accepts plain string OR content-part-list messages (as sent by opencode).
-    Only assistant text tokens are forwarded; reasoning/citations/images are dropped.
+    OpenAI-compatible streaming endpoint.
 
-    Markdown stripping is controlled by two config flags:
-        MARKParser  (default True)  – strip all markdown.
-        CodeParser  (default False) – when True, ONLY strip fenced code-block
-                                      delimiters (overrides full-strip mode).
+    Chat / search / reasoning (mode set in config):
+        POST { "model": "arena", "messages": [...] }
+
+    Image generation:
+        POST { ..., "image": true }
+
+    Image edit:
+        POST { ..., "image": true, "image_edit": true,
+                    "image_path": "/absolute/path/to/source.png" }
+
+    Markdown stripping is controlled by MARKParser / CodeParser in the config.
     """
     prompt = ""
     for msg in reversed(request.messages):
@@ -560,8 +759,24 @@ async def chat_completions(request: ChatCompletionRequest):
     if not prompt:
         raise HTTPException(status_code=400, detail="No user message found.")
 
+    if request.image_edit and not request.image_path:
+        raise HTTPException(
+            status_code=400,
+            detail="image_edit=true requires image_path to be provided.",
+        )
+    if request.image_path and not os.path.exists(request.image_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"image_path not found on server: {request.image_path}",
+        )
+
     return StreamingResponse(
-        _stream_arena(prompt),
+        _stream_arena(
+            prompt,
+            override_image=request.image,
+            override_image_edit=request.image_edit,
+            image_path=request.image_path,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -573,4 +788,4 @@ async def chat_completions(request: ChatCompletionRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("arena_openai_api:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("arena_openai_api:app", host=SERVER_HOST, port=SERVER_PORT, reload=False)
