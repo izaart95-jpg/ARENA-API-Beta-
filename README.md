@@ -4,10 +4,10 @@
 
 ---
 
-### New Update - Captcha Extension
-
-No Browser Automation or Heavy Workaround
-By the way its still experimental and only recommended as fallback or testing
+### Note: Current Captcha-Extensions is the stable version
+### if you are getting recaptcha valiation failed frequently 
+### try latest version of Extension from main repo
+### https://github.com/izaart95-jpg/Captcha-Extension
 
 ### Sister projects
 #### [Deep Router - Deepseek Api](https://github.com/izaart95-jpg/DeepRouter)
