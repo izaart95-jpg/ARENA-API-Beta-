@@ -1,6 +1,8 @@
 # Arena reCAPTCHA Harvester — Extension
+# ORGINAL REPO - https://github.com/izaart95-jpg/Captcha-Extension
 ## Can be tuned easily for any website with recaptcha v3 and v2
-
+### Note v2 captcha isnt standalone supported and recommended use rektcaptcha extesnion along
+### with this etension to get v2 tokens
 ## Architecture
 
 ```
