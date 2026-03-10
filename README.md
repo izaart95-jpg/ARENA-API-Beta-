@@ -3,20 +3,43 @@
 > **Status:** Beta · ~90% complete — CAPTCHA bypass remains outstanding (Better but not guaranteed highest streak is 30 prompts without captcha error).
 
 ---
+# Overview
+## Arena-Api-Bridge provides two primary methods for token harvesting:
+### 1. CaptchaExtensions — Stable extension-based approach with Rektcaptcha integration for v2 captcha
 
-### Note: Current Captcha-Extensions is the stable version
-### if you are getting recaptcha valiation failed frequently 
-### try latest version of Extension from main repo
-### https://github.com/izaart95-jpg/Captcha-Extension
+### 2.Fallback Browser Automation — Two options:
 
-### Sister projects
-#### [Deep Router - Deepseek Api](https://github.com/izaart95-jpg/DeepRouter)
+#### - ```Camoufox``` — Experimental Firefox-based automation with fingerprint randomization
 
-#### [Kimi-Bridge - Kimi Api](https://github.com/izaart95-jpg/Kimi-Bridge)
-
-#### [GLM-Bridge - GLM API Bridge](https://github.com/izaart95-jpg/GLM-Bridge)
+#### - ```arena_token.py``` — Recommended production approach with Brave browser optimization Any chromium browser works brave is recommended
 
 ---
+
+### Note: Current Captcha-Extensions is the stable version if you are getting recaptcha valiation failed frequently try latest version of Extension from main repo https://github.com/izaart95-jpg/Captcha-Extension
+
+---
+##  Usage & Features - If you are having problems
+
+📺 [Watch the usage walkthrough on YouTube - Browser automation](https://youtu.be/hPmg9oMS3e8)
+
+📺 [Extension Usage](https://youtu.be/O-ssgydeuB0)
+
+Use Lmarena Credentials From Video To Test Quickly or First Time
+
+# Method 1: Captcha Extensions (Stable)
+
+### The recommended stable solution for CAPTCHA handling. Features Rektcaptcha integration for improved success rates for checkbox captcha.
+
+## Installation
+```bash
+git clone https://github.com/izaart95-jpg/Arena-Api-Bridge.git
+cd Arena-Api-Bridge
+pip install -r requirements.txt
+```
+## Extension Setup
+#### - Open browser go to manage extensions turn on developer options select load unpacked naviagte to Arena-Api-Bridge/Captcha-Extension/extensionselect that folder
+
+# Method 2: Browser Automation (fallbak)
 
 ## 1. Quickstart - Install Dependencies
 ```bash
@@ -44,15 +67,9 @@ Recommended Browser Overall For Arena_token.py is Brave
 
 Now you can run main.py 
 
-## 3. Usage & Features - If you are having problems
 
-📺 [Watch the usage walkthrough on YouTube](https://youtu.be/hPmg9oMS3e8)
 
-📺 [Extension Usage](https://youtu.be/O-ssgydeuB0)
-
-Use Lmarena Credentials From Video To Test Quickly or First Time
-
-### 4. Flags
+### 3. Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -66,7 +83,7 @@ Use Lmarena Credentials From Video To Test Quickly or First Time
 
 > ⚠️ **Compatibility note:** `AUTO_LOGIN=True` and `COOKIES=True` are mutually exclusive. An error is raised at startup if both are enabled simultaneously.
 
-### 5. Parameters
+### 4. Parameters
 
 | Parameter | Description |
 |-----------|-------------|
@@ -78,7 +95,7 @@ Use Lmarena Credentials From Video To Test Quickly or First Time
 
 ---
 
-## 6. Parameter Reference
+## 5. Parameter Reference
 
 ### `PATH` — Browser Executable
 
@@ -106,7 +123,7 @@ Navigate to `chrome://version` in your browser and copy the **Executable Path** 
 
 ---
 
-### 7. `EXTENSIONS_DIR` — Extensions Directory
+### 6. `EXTENSIONS_DIR` — Extensions Directory
 
 Required when `EXTENSIONS=True`. To locate it:
 
@@ -132,7 +149,7 @@ Required when `EXTENSIONS=True`. To locate it:
 
 ---
 
-### 8. `PROFILE_PATH` — Browser Profile Directory
+### 7. `PROFILE_PATH` — Browser Profile Directory
 
 Required when `CUS_PROFILE=True`. All contexts will use this directory as `user_data_dir` instead of the auto-generated `harvester_profiles/` directories.
 
@@ -149,7 +166,7 @@ Required when `CUS_PROFILE=True`. All contexts will use this directory as `user_
 
 ---
 
-### 9. `COOKIE_V1` / `COOKIE_V2` — Auth Cookies
+### 8. `COOKIE_V1` / `COOKIE_V2` — Auth Cookies
 
 Required when `COOKIES=True`. Retrieve these values from your browser's DevTools under the **Application → Cookies** tab.
 
@@ -162,11 +179,19 @@ Required when `COOKIES=True`. Retrieve these values from your browser's DevTools
 
 ---
 
-### 10. Camoufox_harvester 
+### 9. Camoufox_harvester 
 ####  Usage:
 ```bash  
     pip install camoufox[geoip] browserforge fastapi uvicorn
     camoufox fetch                  # download Firefox binary once
     python camoufox_harvester.py
 ```
+---
+### Sister projects
+#### [Deep Router - Deepseek Api](https://github.com/izaart95-jpg/DeepRouter)
+
+#### [Kimi-Bridge - Kimi Api](https://github.com/izaart95-jpg/Kimi-Bridge)
+
+#### [GLM-Bridge - GLM API Bridge](https://github.com/izaart95-jpg/GLM-Bridge)
+
 ---
